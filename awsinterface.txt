@@ -1,0 +1,95 @@
+%matplotlib inline
+from pynq.iop.grove_ear_hr import Grove_EarHR
+from pynq.board.led import LED
+import time
+import matplotlib.pyplot as plt
+from IPython import display
+from pynq.iop import PMODA,PMODB
+from pynq.iop import PMOD_GROVE_G3,PMOD_GROVE_G4
+import numpy as np
+import scipy.signal as signal
+earHR = Grove_EarHR(PMODA, PMOD_GROVE_G4)
+import sys
+#import sdk
+from AWSIoTPythonSDK.MQTTLib import AWSIoTMQTTClient
+#websocket connection
+myMQTTClient = AWSIoTMQTTClient("aws-pynq", useWebsocket=True)
+#aws iot client
+myMQTTClient.configureIAMCredentials("AKIAI6O44CCYTKAQVA5A","vAAfcUd3UoyyAbgVM7SJI4caZgGPGCR/oxMJ2Zm6")
+#configura webscket
+myMQTTClient.configureEndpoint("a2kas2arl3xote.iot.us-west-2.amazonaws.com",443)
+#certificato webscket
+myMQTTClient.configureCredentials("rootCA.pem")
+
+myMQTTClient.configureOfflinePublishQueueing(-1)
+myMQTTClient.configureDrainingFrequency(2)
+myMQTTClient.configureConnectDisconnectTimeout(10)
+myMQTTClient.configureMQTTOperationTimeout(5)
+
+myMQTTClient.connect()
+
+
+led = LED(0)
+led.off()
+
+beats, deltaT = earHR.read_raw()
+oldBeats = beats
+count=0
+mylist=[]
+offset=20
+N=512
+Ts=0.3
+Fs=1/Ts
+index_list = []
+
+while (1):
+    
+    while(N+offset>count):
+        try:
+            beats, deltaT = earHR.read_raw()
+            if(oldBeats == beats):
+                led.off()
+            else:
+                led.on()
+            if count>offset:
+                mylist.append(deltaT)
+            oldBeats = beats
+
+            time.sleep(Ts)
+
+            count+=1
+
+        except KeyboardInterrupt:
+            break
+    count=0        
+    f, Pxx = signal.welch(mylist, fs=Fs, nperseg=256)        
+    
+    lfy = []
+    hfy = []
+    lfx = []
+    hfx = []
+    
+    for element in range(len(f)):
+        if f[element] > 0.04 and f[element] < 0.15:
+            lfy.append(Pxx[element])
+            lfx.append(f[element])
+        elif f[element] > 0.15 and f[element] < 0.4:
+            hfy.append(Pxx[element])
+            hfx.append(f[element])
+
+    LF = np.trapz(y = lfy, x=lfx)
+    HF = np.trapz(y = hfy, x=hfx)
+    
+    index=LF/HF
+    norm_index = index/(0.11/0.25)
+    index_list.append(norm_index)
+    print(norm_index, flush=True)
+    
+
+    tmp = "{\"misura\":" + str(norm_index) + "}"
+    myMQTTClient.publish("boards/device1",tmp,0)
+
+myMQTTClient.unsubscribe("boards/device1")
+
+myMQTTClient.disconnect()
+
